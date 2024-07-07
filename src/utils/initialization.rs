@@ -9,6 +9,8 @@ use tracing::{info, error};
 use crate::config::redis::Config;
 use crate::handlers::connection::handle_connection;
 use crate::handlers::metrics::metrics_handler;
+use crate::utils::availability::ServiceAvailability;
+
 
 pub async fn init_redis_client(redis_host: String) -> Result<Arc<Mutex<Client>>, redis::RedisError> {
     let client = Client::open(redis_host)?;
@@ -25,12 +27,13 @@ pub async fn start_servers(
     config: Arc<Mutex<Config>>,
     total_connections: IntCounter,
     canary_connections: IntCounter,
+    availability: Arc<ServiceAvailability>,
 ) -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:3000").await?;
-    info!("TCP Gateway running on 127.0.0.1:3000");
+    let listener = TcpListener::bind("0.0.0.0:3000").await?;
+    info!("TCP Gateway running on 0.0.0.0:3000");
 
     let app = Router::new().route("/metrics", get(metrics_handler));
-    let metrics_addr = TcpListener::bind("127.0.0.1:9090").await.unwrap();
+    let metrics_addr = TcpListener::bind("0.0.0.0:9090").await.unwrap();
 
     let metrics_server = tokio::spawn(async move {
         axum::serve(metrics_addr, app).await.unwrap();
@@ -41,10 +44,11 @@ pub async fn start_servers(
             if let Err(e) = async {
                 let (socket, _) = listener.accept().await?;
                 let config = Arc::clone(&config);
+                let availability = Arc::clone(&availability);
                 let total_connections = total_connections.clone();
                 let canary_connections = canary_connections.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(socket, config, total_connections, canary_connections).await {
+                    if let Err(e) = handle_connection(socket, config, total_connections, canary_connections, availability).await {
                         error!("Failed to handle connection: {}", e);
                     }
                 });

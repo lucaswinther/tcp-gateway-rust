@@ -7,9 +7,23 @@ services:
       - "6379:6379"
 
   redis-init:
-    image: busybox
+    image: redis:alpine
     depends_on:
       - redis
     volumes:
       - ./init:/init
     entrypoint: ["/bin/sh", "/init/init-redis.sh"]
+
+  primary:
+    build: ../example_app
+    environment:
+      - APP_PORT=4000
+    ports:
+      - "4000:4000"
+
+  canary:
+    build: ../example_app
+    environment:
+      - APP_PORT=5000
+    ports:
+      - "5000:5000"
