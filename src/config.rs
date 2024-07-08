@@ -38,12 +38,11 @@ pub struct ConfigManager {
     config: Arc<RwLock<GatewayConfig>>,
     server_status: Arc<RwLock<ServerStatus>>,
     redis_client: redis::Client,
-    redis_key: String,
 }
 
 impl ConfigManager {
     // Cria uma nova instância do gerenciador de configuração
-    pub async fn new(redis_url: &str, redis_key: &str) -> Self {
+    pub async fn new(redis_url: &str) -> Self {
         let client = redis::Client::open(redis_url).expect("Invalid Redis URL");
         let config = Arc::new(RwLock::new(GatewayConfig {
             primary_addr: String::new(),
@@ -59,8 +58,7 @@ impl ConfigManager {
         ConfigManager {
             config,
             server_status,
-            redis_client: client,
-            redis_key: redis_key.to_string(),
+            redis_client: client
         }
     }
 
@@ -73,7 +71,7 @@ impl ConfigManager {
                 return;
             }
         };
-        let config_str: String = match con.get(&self.redis_key).await {
+        let config_str: String = match con.get("gateway_config").await {
             Ok(config) => config,
             Err(e) => {
                 error!("Failed to get config from Redis: {}", e);

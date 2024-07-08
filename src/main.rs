@@ -5,13 +5,13 @@ use crate::config::ConfigManager;
 use crate::balancer::Balancer;
 use tokio::spawn;
 use dotenv::dotenv;
+use std::env;
 use tracing::{info, error};
 use tracing_subscriber;
 use std::time::Duration;
 
 struct EnvConfig {
     redis_url: String,
-    redis_key: String,
     config_update_interval: Duration,
     status_update_interval: Duration,
 }
@@ -19,20 +19,18 @@ struct EnvConfig {
 fn init_env() -> EnvConfig {
     dotenv().ok();
 
-    let redis_url = std::env::var("REDIS_URL").expect("REDIS_URL must be set in .env file");
-    let redis_key = std::env::var("REDIS_KEY").expect("REDIS_KEY must be set in .env file");
-    let config_update_interval = std::env::var("CONFIG_UPDATE_INTERVAL")
+    let redis_url = env::var("REDIS_URL").expect("REDIS_URL must be set in .env file");
+    let config_update_interval = env::var("CONFIG_UPDATE_INTERVAL")
         .unwrap_or_else(|_| "10".to_string())
         .parse::<u64>()
         .expect("CONFIG_UPDATE_INTERVAL must be a valid number");
-    let status_update_interval = std::env::var("STATUS_UPDATE_INTERVAL")
+    let status_update_interval = env::var("STATUS_UPDATE_INTERVAL")
         .unwrap_or_else(|_| "10".to_string())
         .parse::<u64>()
         .expect("STATUS_UPDATE_INTERVAL must be a valid number");
 
     EnvConfig {
         redis_url,
-        redis_key,
         config_update_interval: Duration::from_secs(config_update_interval),
         status_update_interval: Duration::from_secs(status_update_interval),
     }
@@ -47,7 +45,7 @@ async fn main() {
     let env_config = init_env();
 
     // Cria o gerenciador de configuração
-    let config_manager = ConfigManager::new(&env_config.redis_url, &env_config.redis_key).await;
+    let config_manager = ConfigManager::new(&env_config.redis_url).await;
 
     // Inicia o loop de atualização da configuração
     let config_manager_clone = config_manager.clone();
