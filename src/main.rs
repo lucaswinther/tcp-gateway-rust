@@ -1,58 +1,54 @@
 mod config;
-mod handlers;
-mod utils;
+mod balancer;
 
+use crate::config::ConfigManager;
+use crate::balancer::Balancer;
+use tokio::spawn;
 use dotenv::dotenv;
-use tracing::info;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::env;
+use tracing::{info, error};
 use tracing_subscriber;
-use crate::utils::env::load_env;
-use crate::utils::initialization::{init_redis_client, init_metrics_counters, start_servers};
-use crate::utils::shutdown::shutdown_signal;
-use crate::utils::availability::{ServiceAvailability, start_availability_checkers};
+use std::time::Duration;
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() {
+    // Carrega as variáveis de ambiente do arquivo .env
+    dotenv().ok();
+    
+    // Inicializa o sistema de logging
     tracing_subscriber::fmt::init();
 
-    dotenv().ok();
-    let (redis_host, redis_key) = load_env();
+    // Obtém a URL do Redis e a chave de configuração do ambiente
+    let redis_url = env::var("REDIS_URL").expect("REDIS_URL must be set in .env file");
+    let redis_key = env::var("REDIS_KEY").expect("REDIS_KEY must be set in .env file");
+    let config_update_interval = env::var("CONFIG_UPDATE_INTERVAL")
+        .unwrap_or_else(|_| "10".to_string())
+        .parse::<u64>()
+        .expect("CONFIG_UPDATE_INTERVAL must be a valid number");
+    let status_update_interval = env::var("STATUS_UPDATE_INTERVAL")
+        .unwrap_or_else(|_| "10".to_string())
+        .parse::<u64>()
+        .expect("STATUS_UPDATE_INTERVAL must be a valid number");
 
-    info!("Connecting to Redis...");
-    let redis_client = init_redis_client(redis_host).await.expect("Failed to Connecting to Redis");
-    
-    info!("Fetching initial configuration from Redis...");
-    let initial_config = config::redis::fetch_config_from_redis(redis_client.clone(), &redis_key)
-        .await
-        .expect("Failed to load initial config from Redis");
-    let config = Arc::new(Mutex::new(initial_config));
+    // Cria o gerenciador de configuração
+    let config_manager = ConfigManager::new(&redis_url, &redis_key).await;
 
-    let service_availability = Arc::new(ServiceAvailability::new());
-    let redis_client_clone = Arc::clone(&redis_client);
-    
-    info!("Starting configuration updater...");
-    tokio::spawn({
-        let config_clone = Arc::clone(&config);
-        async move {
-            config::redis::config_updater(config_clone, redis_client_clone, &redis_key).await;
-        }
+    // Inicia o loop de atualização da configuração
+    let config_manager_clone = config_manager.clone();
+    spawn(async move {
+        config_manager_clone.start_update_config_loop(Duration::from_secs(config_update_interval)).await;
     });
 
-    let (total_connections, canary_connections) = init_metrics_counters();
+    // Inicia o loop de verificação de status dos servidores
+    let config_manager_clone = config_manager.clone();
+    spawn(async move {
+        config_manager_clone.start_update_server_status_loop(Duration::from_secs(status_update_interval)).await;
+    });
 
-    info!("Starting servers...");
-    start_servers(config.clone(), total_connections.clone(), canary_connections.clone(), service_availability.clone()).await?;
-
-    // Start availability checkers after servers are running
-    info!("Starting availability checkers...");
-    start_availability_checkers(
-        config.lock().await.primary_addr.clone(),
-        config.lock().await.canary_addr.clone(),
-        service_availability.clone(),
-    ).await;
-
-    shutdown_signal().await;
-
-    Ok(())
+    // Inicia o balanceador de carga
+    let balancer = Balancer::new(config_manager);
+    info!("Starting the balancer on 0.0.0.0:8080");
+    if let Err(e) = balancer.run("0.0.0.0:8080").await {
+        error!("Failed to run the balancer: {}", e);
+    }
 }
