@@ -7,14 +7,27 @@ use tracing::{info, error};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct GatewayConfig {
     pub primary_addr: String,
     pub canary_addr: String,
     pub canary_percentage: u8,
+    #[serde(default = "default_interval_config_update")]
+    config_update_interval: u64,
+    #[serde(default = "default_interval_status_update")]
+    status_update_interval: u64,
 }
 
-#[derive(Debug, Clone)]
+fn default_interval_config_update() -> u64 {
+    5
+}
+
+fn default_interval_status_update() -> u64 {
+    1
+}
+
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ServerStatus {
     pub primary_online: bool,
     pub canary_online: bool,
@@ -36,6 +49,8 @@ impl ConfigManager {
             primary_addr: String::new(),
             canary_addr: String::new(),
             canary_percentage: 0,
+            config_update_interval: default_interval_config_update(),
+            status_update_interval: default_interval_status_update(),
         }));
         let server_status = Arc::new(RwLock::new(ServerStatus {
             primary_online: false,
@@ -65,8 +80,16 @@ impl ConfigManager {
                 return;
             }
         };
-        let new_config: GatewayConfig = match serde_json::from_str(&config_str) {
-            Ok(config) => config,
+        let new_config: GatewayConfig = match serde_json::from_str::<GatewayConfig>(&config_str) {
+            Ok(mut config) => {
+                if config.config_update_interval == 0 {
+                    config.config_update_interval = default_interval_config_update();
+                }
+                if config.status_update_interval == 0 {
+                    config.status_update_interval = default_interval_status_update();
+                }
+                config
+            },
             Err(e) => {
                 error!("Failed to deserialize config: {}", e);
                 return;
@@ -74,8 +97,10 @@ impl ConfigManager {
         };
 
         let mut config_write = self.config.write().await;
-        *config_write = new_config;
-        info!("Updated configuration: {:?}", *config_write);
+        if *config_write != new_config {
+            *config_write = new_config;
+            info!("Updated configuration: {:?}", *config_write);
+        }
     }
 
     // Inicia o loop de atualização da configuração
@@ -104,11 +129,16 @@ impl ConfigManager {
         let primary_online = check_server(&config.primary_addr).await;
         let canary_online = check_server(&config.canary_addr).await;
 
-        let mut status_write = self.server_status.write().await;
-        status_write.primary_online = primary_online;
-        status_write.canary_online = canary_online;
+        let new_status = ServerStatus {
+            primary_online,
+            canary_online,
+        };
 
-        info!("Server status updated: {:?}", *status_write);
+        let mut status_write = self.server_status.write().await;
+        if *status_write != new_status {
+            *status_write = new_status;
+            info!("Server status updated: {:?}", *status_write);
+        }
     }
 
     // Retorna a configuração atual
